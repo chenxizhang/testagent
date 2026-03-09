@@ -1,0 +1,118 @@
+name: Task scheduler
+
+on:
+  schedule:
+    # Run daily at 08:00 UTC (16:00 Beijing time)
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      task_file:
+        description: 'Task definition file path (default: .github/tasks/daily.json)'
+        required: false
+        default: '.github/tasks/daily.json'
+      agent:
+        description: 'Agent to assign (Copilot, Claude, Codex, or all)'
+        required: false
+        default: 'Copilot'
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  # Agent bot node IDs for GraphQL assignment
+  COPILOT_NODE_ID: "BOT_kgDOC9w8XQ"
+  CLAUDE_NODE_ID: "BOT_kgDODnPHJg"
+  CODEX_NODE_ID: "BOT_kgDODnSAjQ"
+
+jobs:
+  create-tasks:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read task definitions
+        id: tasks
+        run: |
+          TASK_FILE="${{ github.event.inputs.task_file || '.github/tasks/daily.json' }}"
+          if [ ! -f "$TASK_FILE" ]; then
+            echo "Task file not found: $TASK_FILE"
+            echo "tasks=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Read and compact the JSON
+          TASKS=$(cat "$TASK_FILE" | jq -c '.')
+          echo "tasks=$TASKS" >> "$GITHUB_OUTPUT"
+
+      - name: Create issues and assign agents
+        run: |
+          TASKS='${{ steps.tasks.outputs.tasks }}'
+          AGENT_INPUT="${{ github.event.inputs.agent || 'Copilot' }}"
+
+          if [ "$TASKS" = "[]" ] || [ -z "$TASKS" ]; then
+            echo "No tasks to create"
+            exit 0
+          fi
+
+          echo "$TASKS" | jq -c '.[]' | while read -r task; do
+            TITLE=$(echo "$task" | jq -r '.title')
+            BODY=$(echo "$task" | jq -r '.body')
+            LABELS=$(echo "$task" | jq -r '.labels // [] | join(",")')
+            AGENT=$(echo "$task" | jq -r ".agent // \"$AGENT_INPUT\"")
+
+            # Create issue
+            LABEL_ARGS=""
+            if [ -n "$LABELS" ]; then
+              LABEL_ARGS="--label $LABELS"
+            fi
+
+            ISSUE_URL=$(gh issue create \
+              --repo ${{ github.repository }} \
+              --title "$TITLE" \
+              --body "$BODY" \
+              $LABEL_ARGS 2>&1)
+
+            echo "Created: $ISSUE_URL"
+
+            # Extract issue number
+            ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oP '\d+$')
+
+            # Get issue node ID for GraphQL
+            ISSUE_NODE_ID=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER --jq '.node_id')
+
+            # Determine which agent(s) to assign
+            assign_agent() {
+              local NODE_ID=$1
+              gh api graphql -f query="
+                mutation {
+                  addAssigneesToAssignable(input: {
+                    assignableId: \"${ISSUE_NODE_ID}\"
+                    assigneeIds: [\"${NODE_ID}\"]
+                  }) {
+                    assignable {
+                      ... on Issue {
+                        assignees(first: 1) {
+                          nodes { login }
+                        }
+                      }
+                    }
+                  }
+                }"
+            }
+
+            case "$AGENT" in
+              Copilot) assign_agent "$COPILOT_NODE_ID" ;;
+              Claude)  assign_agent "$CLAUDE_NODE_ID" ;;
+              Codex)   assign_agent "$CODEX_NODE_ID" ;;
+              all)
+                assign_agent "$COPILOT_NODE_ID"
+                assign_agent "$CLAUDE_NODE_ID"
+                assign_agent "$CODEX_NODE_ID"
+                ;;
+            esac
+
+            echo "Assigned $AGENT to issue #$ISSUE_NUMBER"
+          done
