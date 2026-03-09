@@ -1,0 +1,8 @@
+[
+  {
+    "title": "Daily news digest for today",
+    "body": "## Task\n\nSearch for today's hot news and save a digest in the `news/` directory.\n\n### Requirements:\n1. Create `news/hot-news-{today's date}.md`\n2. Include at least 10 trending news items\n3. Organize by category (Tech, World, Science, Business, etc.)\n4. Each item: title, brief summary, source\n5. Use proper markdown formatting",
+    "labels": "enhancement",
+    "agent": "Copilot"
+  }
+]

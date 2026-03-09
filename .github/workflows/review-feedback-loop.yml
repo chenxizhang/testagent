@@ -1,0 +1,65 @@
+name: Review feedback loop
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  handle-review:
+    # Only act on Copilot code reviews for agent-created PRs
+    if: >-
+      github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' &&
+      (
+        github.event.pull_request.user.login == 'Copilot' ||
+        github.event.pull_request.user.login == 'Claude' ||
+        github.event.pull_request.user.login == 'Codex'
+      )
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Count review iterations
+        id: count
+        run: |
+          # Count how many times the review bot has submitted reviews (= iteration count)
+          REVIEW_COUNT=$(gh api repos/$REPO/pulls/$PR_NUMBER/reviews \
+            --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length')
+          echo "review_count=$REVIEW_COUNT" >> "$GITHUB_OUTPUT"
+          echo "Review iteration: $REVIEW_COUNT"
+
+      - name: Check for inline code suggestions
+        id: check
+        run: |
+          # Get review comments (inline code suggestions) from the latest review
+          REVIEW_ID=${{ github.event.review.id }}
+          COMMENTS=$(gh api repos/$REPO/pulls/$PR_NUMBER/reviews/$REVIEW_ID/comments \
+            --jq 'length')
+          echo "inline_comments=$COMMENTS" >> "$GITHUB_OUTPUT"
+          echo "Found $COMMENTS inline code suggestions"
+
+      - name: Request agent to fix (if needed)
+        if: steps.check.outputs.inline_comments != '0' && steps.count.outputs.review_count < 3
+        run: |
+          AGENT_LOGIN=""
+          case "$PR_AUTHOR" in
+            Copilot) AGENT_LOGIN="copilot" ;;
+            Claude)  AGENT_LOGIN="claude" ;;
+            Codex)   AGENT_LOGIN="codex" ;;
+          esac
+
+          gh pr comment $PR_NUMBER --repo $REPO --body \
+            "@${AGENT_LOGIN} The code review found ${{ steps.check.outputs.inline_comments }} suggestion(s). Please address the review feedback above and push a fix. (Iteration ${{ steps.count.outputs.review_count }}/3)"
+
+      - name: Enable auto-merge (review passed or max iterations)
+        if: steps.check.outputs.inline_comments == '0' || steps.count.outputs.review_count >= 3
+        run: |
+          echo "Review passed or max iterations reached. Ensuring auto-merge is enabled."
+          gh pr merge $PR_NUMBER --repo $REPO --auto --squash || true
