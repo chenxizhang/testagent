@@ -1,0 +1,220 @@
+name: CD — Auto Release mgc
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mgc/**'
+      - 'CHANGELOG.md'
+
+permissions:
+  contents: write
+
+jobs:
+  check-for-release:
+    name: Check if release is needed
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from code
+        id: check
+        run: |
+          # Look for version constant in main.go
+          VERSION_FILE="mgc/main.go"
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "No mgc/main.go found — skipping release"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract version from Go code
+          CODE_VERSION=$(grep -oP 'Version\s*=\s*"\K[^"]+' "$VERSION_FILE" 2>/dev/null || \
+                         grep -oP "Version\s*=\s*'\K[^']+" "$VERSION_FILE" 2>/dev/null || \
+                         echo "")
+
+          if [ -z "$CODE_VERSION" ]; then
+            echo "No Version constant found in main.go"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Code version: $CODE_VERSION"
+
+          # Check if this version tag already exists
+          TAG="v$CODE_VERSION"
+          if git tag --list "$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already exists — skipping release"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New version $TAG found — will release!"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CODE_VERSION" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-release:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    needs: check-for-release
+    if: needs.check-for-release.outputs.should_release == 'true'
+    outputs:
+      has_binaries: ${{ steps.build.outputs.has_binaries }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+          cache-dependency-path: mgc/go.sum
+
+      - name: Run tests before release
+        working-directory: mgc
+        run: |
+          if [ -f "go.mod" ]; then
+            go test ./... -race -count=1 -timeout=120s
+          else
+            echo "go.mod not found — skipping tests"
+          fi
+
+      - name: Build cross-platform binaries
+        id: build
+        working-directory: mgc
+        run: |
+          VERSION="${{ needs.check-for-release.outputs.version }}"
+          mkdir -p dist
+
+          if [ ! -f "go.mod" ]; then
+            echo "go.mod not found — no binaries to build"
+            echo "has_binaries=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LDFLAGS="-s -w -X main.Version=$VERSION"
+
+          build_binary() {
+            local os=$1 arch=$2 ext=$3
+            local output="dist/mgc-${os}-${arch}${ext}"
+            echo "Building $output..."
+            GOOS=$os GOARCH=$arch go build \
+              -ldflags="$LDFLAGS" \
+              -o "$output" \
+              . 2>&1 || echo "  (build failed for $os/$arch)"
+          }
+
+          build_binary linux   amd64 ""
+          build_binary linux   arm64 ""
+          build_binary darwin  amd64 ""
+          build_binary darwin  arm64 ""
+          build_binary windows amd64 ".exe"
+
+          ls -la dist/ || echo "No binaries in dist/"
+
+          if ls dist/mgc-* 2>/dev/null | grep -q .; then
+            echo "has_binaries=true" >> "$GITHUB_OUTPUT"
+
+            # Create checksums
+            cd dist
+            sha256sum mgc-* > SHA256SUMS 2>/dev/null || \
+              shasum -a 256 mgc-* > SHA256SUMS 2>/dev/null || \
+              echo "Could not generate checksums"
+            cat SHA256SUMS 2>/dev/null || true
+          else
+            echo "has_binaries=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload artifacts
+        if: steps.build.outputs.has_binaries == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mgc-release-${{ needs.check-for-release.outputs.version }}
+          path: mgc/dist/
+          retention-days: 30
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [check-for-release, build-release]
+    if: needs.check-for-release.outputs.should_release == 'true'
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        if: needs.build-release.outputs.has_binaries == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: mgc-release-${{ needs.check-for-release.outputs.version }}
+          path: dist/
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          VERSION="${{ needs.check-for-release.outputs.version }}"
+          CHANGELOG="CHANGELOG.md"
+
+          if [ -f "$CHANGELOG" ]; then
+            # Extract the section for this version
+            NOTES=$(awk "/^## \[$VERSION\]/{found=1; next} found && /^## \[/{exit} found{print}" "$CHANGELOG")
+            if [ -z "$NOTES" ]; then
+              NOTES="Release v$VERSION of the mgc Microsoft Graph CLI tool."
+            fi
+          else
+            NOTES="Release v$VERSION of the mgc Microsoft Graph CLI tool."
+          fi
+
+          # Write to file to handle multi-line
+          echo "$NOTES" > release-notes.md
+          echo "Release notes:"
+          cat release-notes.md
+
+      - name: Create tag
+        run: |
+          VERSION="${{ needs.check-for-release.outputs.version }}"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Create GitHub release (with binaries)
+        if: needs.build-release.outputs.has_binaries == 'true'
+        run: |
+          VERSION="${{ needs.check-for-release.outputs.version }}"
+          gh release create "v$VERSION" \
+            --repo "${{ github.repository }}" \
+            --title "mgc v$VERSION" \
+            --notes-file release-notes.md \
+            dist/* || \
+          gh release create "v$VERSION" \
+            --repo "${{ github.repository }}" \
+            --title "mgc v$VERSION" \
+            --notes-file release-notes.md
+
+      - name: Create GitHub release (without binaries)
+        if: needs.build-release.outputs.has_binaries != 'true'
+        run: |
+          VERSION="${{ needs.check-for-release.outputs.version }}"
+          gh release create "v$VERSION" \
+            --repo "${{ github.repository }}" \
+            --title "mgc v$VERSION" \
+            --notes-file release-notes.md
+
+      - name: Post release announcement
+        run: |
+          VERSION="${{ needs.check-for-release.outputs.version }}"
+          echo "🚀 Released mgc v$VERSION"
+          echo "URL: https://github.com/${{ github.repository }}/releases/tag/v$VERSION"

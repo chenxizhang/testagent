@@ -17,8 +17,8 @@ jobs:
       github.event.pull_request.user.login == 'Codex'
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for agent to finish
-        run: sleep 30
+      - name: Wait for agent to finish writing code
+        run: sleep 60
 
       - name: Mark ready for review (if draft)
         if: github.event.pull_request.draft == true
@@ -34,10 +34,25 @@ jobs:
               }
             }'
 
-      - name: Enable auto-merge
+      - name: Enable auto-merge (squash, requires CI to pass)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr merge ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --auto --squash
+
+      - name: Add welcome comment for agent PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "🤖 **Agent PR detected** from @${PR_AUTHOR}.
+
+- Auto-merge has been enabled (will merge when all required checks pass)
+- Copilot code review will run automatically
+- Architect review (@claude) will be requested for \`mgc/\` changes
+
+*Automated by the mgc project PM system.*"

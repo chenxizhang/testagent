@@ -1,0 +1,187 @@
+{
+  "project": {
+    "name": "mgc - Microsoft Graph CLI",
+    "description": "A cross-platform, agent-friendly command-line tool for the Microsoft Graph API. Inspired by 'gh' and 'az', designed for both human operators and automated agents.",
+    "version_start": "0.1.0",
+    "language": "Go",
+    "tool_name": "mgc",
+    "repository": "chenxizhang/testagent",
+    "build_directory": "mgc/",
+    "release_on_phase_complete": [4, 6]
+  },
+  "agents": {
+    "Copilot": {
+      "role": "Developer",
+      "node_id": "BOT_kgDOC9w8XQ",
+      "specialties": ["feature implementation", "CLI commands", "API integration"]
+    },
+    "Claude": {
+      "role": "Architect / Tester",
+      "node_id": "BOT_kgDODnPHJg",
+      "specialties": ["architecture design", "code review", "test writing", "documentation"]
+    },
+    "Codex": {
+      "role": "Developer",
+      "node_id": "BOT_kgDODnSAjQ",
+      "specialties": ["feature implementation", "parallel development", "build tooling"]
+    }
+  },
+  "phases": [
+    {
+      "id": 1,
+      "name": "Phase 1: Architecture & Foundation",
+      "description": "Design the CLI architecture and initialize the Go project with all scaffolding",
+      "tasks": [
+        {
+          "title": "[ARCH] Design mgc CLI architecture and create ADRs",
+          "agent": "Claude",
+          "labels": ["architecture", "phase-1", "mgc"],
+          "body": "## Objective\n\nAs the architect, design the overall architecture for the `mgc` (Microsoft Graph CLI) tool and document key architectural decisions.\n\n## Requirements\n\n1. **Update `docs/ARCHITECTURE.md`** with:\n   - High-level component diagram (ASCII art)\n   - Layer descriptions: CLI layer (cobra), client layer (HTTP), auth layer (OAuth2)\n   - Data flow: user → command → auth → graph API → output formatter\n   - Output format strategy (JSON, table, YAML, TSV)\n   - Error handling strategy\n   - Configuration file location (`~/.config/mgc/`)\n   - Cross-platform considerations (Windows/macOS/Linux)\n\n2. **Create `docs/adr/` directory** with ADR files:\n   - `001-use-cobra-for-cli.md` - Why cobra over other CLI frameworks\n   - `002-oauth2-device-flow.md` - Auth approach for headless/agent use\n   - `003-output-formats.md` - Why support JSON/table/YAML/TSV\n   - `004-go-language-choice.md` - Cross-platform single binary\n\n3. **Review existing `mgc/` scaffold** and ensure architecture aligns\n\n## Acceptance Criteria\n- `docs/ARCHITECTURE.md` has all required sections\n- At least 3 ADR files created in `docs/adr/`\n- All files use clear, concise English\n- Architecture supports agent-friendly usage (structured JSON output, no interactive prompts unless `--interactive` flag)\n\n## Context\n- The `mgc/` directory has the initial Go scaffold\n- See `README.md` for project overview\n- Reference: https://www.powershellgallery.com/packages/Microsoft.Graph/2.35.1 for API scope\n- Design for parity with popular Graph API operations: users, groups, mail, calendar, files"
+        },
+        {
+          "title": "[DEV] Initialize Go module and cobra CLI framework for mgc",
+          "agent": "Copilot",
+          "labels": ["development", "phase-1", "mgc"],
+          "body": "## Objective\n\nSet up the complete Go project scaffold for the `mgc` CLI tool in the `mgc/` directory.\n\n## Requirements\n\nAll code goes in the `mgc/` directory. Initialize and flesh out:\n\n### 1. `mgc/go.mod`\n```\nmodule github.com/chenxizhang/testagent/mgc\n\ngo 1.22\n```\nAdd dependencies:\n- `github.com/spf13/cobra` - CLI framework\n- `github.com/spf13/viper` - Configuration management\n- `github.com/fatih/color` - Colored output\n- `github.com/olekukonko/tablewriter` - Table output\n- `gopkg.in/yaml.v3` - YAML output\n\n### 2. `mgc/main.go`\nEntry point that calls `cmd.Execute()`.\n\n### 3. `mgc/cmd/root.go`\n- Root `mgc` command with persistent flags:\n  - `--output` / `-o` : output format (`json`, `table`, `yaml`, `tsv`), default `table`\n  - `--query` / `-q` : JMESPath query string to filter output\n  - `--tenant` : Azure tenant ID (overrides config)\n  - `--debug` : Enable debug logging\n- Version command: `mgc version`\n- Config command: `mgc config list`, `mgc config set <key> <value>`\n\n### 4. `mgc/cmd/auth/`\n- `mgc/cmd/auth/auth.go` - `mgc auth` subcommand group\n- `mgc/cmd/auth/login.go` - `mgc auth login [--tenant <id>]` (device flow)\n- `mgc/cmd/auth/logout.go` - `mgc auth logout`\n- `mgc/cmd/auth/status.go` - `mgc auth status` (show current auth)\n\n### 5. `mgc/internal/output/format.go`\n- `Printer` struct with `Print(data interface{}, format string)` method\n- Support: json (pretty), table, yaml, tsv\n- Auto-detect slice vs single object for table headers\n\n### 6. `mgc/internal/auth/auth.go`\n- `AuthManager` struct\n- `Login(tenantID string) error` - Initiate device flow, print user code\n- `GetToken() (string, error)` - Return cached or refreshed token\n- `Logout() error` - Clear cached credentials\n- Store tokens in `~/.config/mgc/credentials.json`\n\n## Acceptance Criteria\n- `cd mgc && go build ./...` succeeds with no errors\n- `go test ./...` runs without panics (even with 0 tests)\n- `mgc --help` shows proper help text\n- `mgc version` shows version string\n- Code follows Go standard conventions (`gofmt` formatted)\n\n## Notes\n- Use `github.com/spf13/cobra` for all commands\n- The tool should be cross-platform: no OS-specific syscalls in cmd layer\n- Keep each file under 200 lines"
+        },
+        {
+          "title": "[DEV] Set up GitHub Actions CI pipeline for mgc Go project",
+          "agent": "Codex",
+          "labels": ["development", "phase-1", "mgc", "ci-cd"],
+          "body": "## Objective\n\nThe `.github/workflows/build-test.yml` CI workflow already exists. Verify it correctly handles the `mgc/` subdirectory structure and enhance it.\n\n## Requirements\n\n1. **Verify/update `.github/workflows/build-test.yml`** to:\n   - Run `go build ./...` in the `mgc/` directory\n   - Run `go test ./... -v -race` in `mgc/`\n   - Run `go vet ./...` in `mgc/`\n   - Run `staticcheck ./...` (if available)\n   - Cache Go modules properly\n   - Run on `push` to any branch AND `pull_request`\n   - Report build status in PR comment\n\n2. **Create `mgc/.golangci.yml`** with linting configuration:\n   - Enable: `gofmt`, `govet`, `errcheck`, `staticcheck`, `unused`\n   - Disable: `exhaustive`, `wrapcheck`\n   - Max issues per linter: 50\n\n3. **Create `mgc/Makefile`** with targets:\n   - `make build` → `go build -o bin/mgc ./`\n   - `make test` → `go test ./... -race -cover`\n   - `make lint` → `golangci-lint run`\n   - `make clean` → remove `bin/`\n   - `make cross-build` → build for linux/amd64, darwin/amd64, darwin/arm64, windows/amd64\n\n4. **Create `mgc/.gitignore`** excluding `bin/`, `*.exe`, `dist/`\n\n## Acceptance Criteria\n- `make build` completes successfully\n- `make test` completes without errors\n- CI workflow is syntactically valid YAML\n- Cross-build targets all complete successfully\n\n## Notes\n- Working directory for all go commands is `mgc/`\n- The Go version to use: 1.22 or later\n- Store binaries in `mgc/bin/` (gitignored)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Phase 2: Authentication & Graph Client",
+      "description": "Implement the authentication layer and base Microsoft Graph API HTTP client",
+      "tasks": [
+        {
+          "title": "[DEV] Implement Microsoft Graph API HTTP client with retry and error handling",
+          "agent": "Copilot",
+          "labels": ["development", "phase-2", "mgc"],
+          "body": "## Objective\n\nImplement the base Microsoft Graph API HTTP client in `mgc/internal/client/`.\n\n## Requirements\n\n### `mgc/internal/client/graph.go`\n\n```go\ntype Client struct {\n    BaseURL    string // https://graph.microsoft.com/v1.0\n    HTTPClient *http.Client\n    Auth       auth.AuthManager\n    Debug      bool\n}\n\nfunc New(authMgr auth.AuthManager) *Client\nfunc (c *Client) Get(path string, params url.Values) (*Response, error)\nfunc (c *Client) Post(path string, body interface{}) (*Response, error)\nfunc (c *Client) Patch(path string, body interface{}) (*Response, error)\nfunc (c *Client) Delete(path string) error\n```\n\n### Features:\n1. **Automatic token injection**: Calls `auth.GetToken()` and sets `Authorization: Bearer <token>` header\n2. **Retry logic**: Exponential backoff on 429 (rate limit) and 503 errors, max 3 retries\n3. **Error handling**: Parse Microsoft Graph error responses (`error.code`, `error.message`) into typed errors\n4. **OData pagination**: Helper method `GetAll(path, params)` that follows `@odata.nextLink`\n5. **Debug logging**: When `Debug=true`, log request URL and response status to stderr\n6. **Timeout**: 30 second timeout on all requests\n\n### `mgc/internal/client/response.go`\n```go\ntype Response struct {\n    StatusCode int\n    Body       []byte\n    Value      []json.RawMessage // for OData collections\n    NextLink   string\n}\n\nfunc (r *Response) Unmarshal(v interface{}) error\nfunc (r *Response) UnmarshalValue(v interface{}) error // unmarshals .value array\n```\n\n### `mgc/internal/client/errors.go`\n```go\ntype GraphError struct {\n    Code    string\n    Message string\n    Status  int\n}\nfunc (e *GraphError) Error() string\nfunc IsNotFound(err error) bool\nfunc IsUnauthorized(err error) bool\n```\n\n## Acceptance Criteria\n- All types compile without errors\n- Unit tests in `mgc/internal/client/graph_test.go` with mock HTTP server\n- Tests cover: successful GET, error response, pagination, retry on 429\n- `go test ./internal/client/...` passes\n\n## Notes\n- Use only Go standard library for HTTP (no external HTTP clients)\n- Token refresh should be transparent to callers\n- The client should work with both delegated (user) and app-only authentication"
+        },
+        {
+          "title": "[DEV] Implement device flow OAuth2 authentication with token caching",
+          "agent": "Codex",
+          "labels": ["development", "phase-2", "mgc"],
+          "body": "## Objective\n\nImplement the full OAuth2 device flow authentication in `mgc/internal/auth/auth.go`.\n\n## Requirements\n\n### Device Flow (for `mgc auth login`)\n1. Call `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode`\n2. Display user code and verification URL to user\n3. Poll `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token` until approved or timeout\n4. Save access_token + refresh_token + expiry to `~/.config/mgc/credentials.json`\n\n### Token Management\n1. `GetToken() (string, error)` - Return cached token if not expired, else refresh using refresh_token\n2. Store credentials encrypted using XOR with machine-specific key (hostname+username), base64 encoded\n3. Support multiple tenant profiles in `credentials.json`\n\n### Config File\n`~/.config/mgc/config.json`:\n```json\n{\n  \"default_tenant\": \"...\",\n  \"client_id\": \"14d82eec-204b-4c2f-b7e8-296a70dab67e\",\n  \"default_output\": \"table\"\n}\n```\n\nUse the public Microsoft Graph Explorer client_id: `14d82eec-204b-4c2f-b7e8-296a70dab67e`\n\n### Scopes to request:\n`https://graph.microsoft.com/.default offline_access`\n\n### Files to create:\n- `mgc/internal/auth/auth.go` - Main AuthManager implementation\n- `mgc/internal/auth/token.go` - Token storage and retrieval\n- `mgc/internal/auth/device_flow.go` - Device flow implementation\n- `mgc/internal/auth/auth_test.go` - Unit tests with mocked HTTP\n\n## Acceptance Criteria\n- `mgc auth login` initiates device flow and prints code to user\n- `mgc auth status` shows current authenticated user (calls `/me`)\n- `mgc auth logout` removes cached credentials\n- Token refresh works transparently\n- Unit tests pass: `go test ./internal/auth/...`\n\n## Notes\n- NEVER store tokens in plain text in the codebase\n- Cross-platform: use `~/.config/mgc/` on Linux/Mac, `%APPDATA%\\mgc\\` on Windows\n- No external auth libraries - implement device flow manually with net/http"
+        },
+        {
+          "title": "[TEST] Write unit tests for authentication and Graph client modules",
+          "agent": "Claude",
+          "labels": ["testing", "phase-2", "mgc"],
+          "body": "## Objective\n\nWrite comprehensive unit tests for the authentication and Graph API client modules.\n\n## Requirements\n\n### 1. `mgc/internal/auth/auth_test.go`\nTest cases:\n- `TestDeviceFlowLogin` - Mock MSAL endpoint, verify device code display\n- `TestTokenRefresh` - Create expired token, mock refresh endpoint, verify new token\n- `TestTokenCache` - Write token to disk, read back, verify content\n- `TestLogout` - Verify credentials file is deleted\n- `TestGetTokenExpired` - Simulate expired token, verify refresh is called\n\n### 2. `mgc/internal/client/graph_test.go`\nTest cases:\n- `TestGetSuccess` - Mock Graph API returning 200 with JSON body\n- `TestGetUnauthorized` - Mock 401, verify GraphError type\n- `TestGetRateLimit` - Mock 429 with Retry-After header, verify retry\n- `TestGetPagination` - Mock two pages with @odata.nextLink, verify GetAll returns all items\n- `TestGetNotFound` - Mock 404, verify IsNotFound returns true\n- `TestPostSuccess` - Mock 201 Created response\n\n### 3. Create `mgc/internal/testutil/testutil.go`\nShared test utilities:\n```go\nfunc NewMockGraphServer(responses []MockResponse) *httptest.Server\nfunc NewMockAuthServer() *httptest.Server\nfunc NewTestClient(serverURL string) *client.Client\n```\n\n## Acceptance Criteria\n- `go test ./... -race` passes with 0 failures\n- Test coverage ≥ 70% for `internal/auth` and `internal/client` packages\n- Tests use `httptest.NewServer` for mocking, no external calls\n- Each test function has a clear docstring comment\n\n## Notes\n- Use Go's standard `testing` package, no external test frameworks\n- Use table-driven tests where appropriate\n- Run with `go test ./... -v -coverprofile=coverage.out` and check coverage"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Phase 3: Users & Groups Commands",
+      "description": "Implement the core users and groups management commands",
+      "tasks": [
+        {
+          "title": "[DEV] Implement mgc users commands (list, get, create, update, delete)",
+          "agent": "Copilot",
+          "labels": ["development", "phase-3", "mgc"],
+          "body": "## Objective\n\nImplement all `mgc users` subcommands in `mgc/cmd/users/`.\n\n## Commands to implement\n\n### `mgc users list`\n- Flags: `--filter <odata-filter>`, `--select <fields>`, `--top <int>`, `--all` (follow pagination)\n- Calls `GET /users?$filter=...&$select=...&$top=...`\n- Default columns for table output: `id`, `displayName`, `userPrincipalName`, `mail`, `jobTitle`\n- Example: `mgc users list --filter \"startsWith(displayName,'A')\" -o json`\n\n### `mgc users get <id-or-upn>`\n- Calls `GET /users/{id}`\n- Shows all user properties in table\n- Example: `mgc users get user@contoso.com`\n\n### `mgc users create`\n- Flags: `--display-name`, `--upn`, `--password`, `--force-change-password`\n- Calls `POST /users`\n- Example: `mgc users create --display-name \"John Doe\" --upn john@contoso.com --password P@ssw0rd`\n\n### `mgc users update <id-or-upn>`\n- Flags: `--display-name`, `--job-title`, `--department`, `--mobile-phone`\n- Calls `PATCH /users/{id}`\n\n### `mgc users delete <id-or-upn>`\n- Calls `DELETE /users/{id}`\n- Requires `--yes` flag to confirm, or prompts if terminal is interactive\n\n## File structure:\n- `mgc/cmd/users/users.go` - Parent command, registers subcommands\n- `mgc/cmd/users/list.go`\n- `mgc/cmd/users/get.go`\n- `mgc/cmd/users/create.go`\n- `mgc/cmd/users/update.go`\n- `mgc/cmd/users/delete.go`\n\n## Acceptance Criteria\n- All commands compile and have proper `--help` text\n- Commands registered in `cmd/root.go`\n- `go build ./...` passes\n- Output respects `--output` flag (json, table, yaml, tsv)\n\n## Notes\n- Use `mgc/internal/client` for all API calls\n- Use `mgc/internal/output` for all output formatting\n- Error messages should include the Graph error code when available"
+        },
+        {
+          "title": "[DEV] Implement mgc groups commands (list, get, create, members)",
+          "agent": "Codex",
+          "labels": ["development", "phase-3", "mgc"],
+          "body": "## Objective\n\nImplement all `mgc groups` subcommands in `mgc/cmd/groups/`.\n\n## Commands to implement\n\n### `mgc groups list`\n- Flags: `--filter <odata-filter>`, `--select <fields>`, `--top <int>`, `--all`\n- Calls `GET /groups?$filter=...`\n- Default columns: `id`, `displayName`, `mail`, `groupTypes`\n- Example: `mgc groups list --filter \"startsWith(displayName,'Dev')\" -o table`\n\n### `mgc groups get <id>`\n- Calls `GET /groups/{id}`\n\n### `mgc groups create`\n- Flags: `--display-name`, `--mail-nickname`, `--description`, `--mail-enabled`, `--security-enabled`\n- Calls `POST /groups`\n- Example: `mgc groups create --display-name \"DevTeam\" --mail-nickname devteam --security-enabled`\n\n### `mgc groups members`\n- `mgc groups members list <group-id>` - `GET /groups/{id}/members`\n- `mgc groups members add <group-id> --member <user-id>` - `POST /groups/{id}/members/$ref`\n- `mgc groups members remove <group-id> --member <user-id>` - `DELETE /groups/{id}/members/{member-id}/$ref`\n\n### `mgc groups owners`\n- `mgc groups owners list <group-id>` - `GET /groups/{id}/owners`\n\n## File structure:\n- `mgc/cmd/groups/groups.go`\n- `mgc/cmd/groups/list.go`\n- `mgc/cmd/groups/get.go`\n- `mgc/cmd/groups/create.go`\n- `mgc/cmd/groups/members.go`\n- `mgc/cmd/groups/owners.go`\n\n## Acceptance Criteria\n- All commands compile with `go build ./...`\n- `mgc groups --help` shows all subcommands\n- Commands respect `--output` and `--query` global flags\n- Registered in root command\n\n## Notes\n- Follow the same pattern as `cmd/users/`\n- Use `internal/client` and `internal/output` packages\n- `--all` flag should auto-paginate using `GetAll()`"
+        },
+        {
+          "title": "[TEST] Write integration tests for users and groups commands",
+          "agent": "Claude",
+          "labels": ["testing", "phase-3", "mgc"],
+          "body": "## Objective\n\nWrite integration tests for `mgc users` and `mgc groups` commands using a mock Graph API server.\n\n## Requirements\n\n### 1. `mgc/cmd/users/users_test.go`\nTest cases (all using mock HTTP server):\n- `TestUsersList` - Verify correct API call, correct output format\n- `TestUsersListWithFilter` - Verify filter is passed in query string\n- `TestUsersGet` - Verify single user output\n- `TestUsersCreate` - Verify POST body is correct\n- `TestUsersDelete_WithConfirm` - Verify `--yes` flag skips prompt\n- `TestUsersListPagination` - Verify `--all` follows nextLink\n\n### 2. `mgc/cmd/groups/groups_test.go`\nTest cases:\n- `TestGroupsList` - Verify correct output\n- `TestGroupsCreate` - Verify POST body\n- `TestGroupsMembersList` - Verify members endpoint called\n- `TestGroupsMembersAdd` - Verify $ref POST\n\n### 3. `mgc/cmd/cmd_test.go`\n- `TestRootHelp` - Verify `mgc --help` output contains expected commands\n- `TestVersionCmd` - Verify version string format\n- `TestOutputFormats` - Verify json/table/yaml output for same data\n\n## Test Pattern\nUse a helper that replaces the client base URL with mock server URL:\n```go\nfunc withMockServer(responses []testutil.MockResponse, fn func(cmd *cobra.Command)) {\n    server := testutil.NewMockGraphServer(responses)\n    defer server.Close()\n    // Set client base URL to server.URL\n    fn(rootCmd)\n}\n```\n\n## Acceptance Criteria\n- `go test ./cmd/...` passes\n- Coverage ≥ 60% for cmd packages\n- All tests are independent (no shared state between tests)\n\n## Notes\n- Capture stdout using `bytes.Buffer` and `cmd.SetOut()`\n- Use `cobra.Command.Execute()` to run commands in tests\n- Mock responses should be realistic Graph API JSON"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Phase 4: Mail & Calendar + Release v0.1.0",
+      "description": "Implement mail and calendar commands, then release v0.1.0",
+      "tasks": [
+        {
+          "title": "[DEV] Implement mgc mail commands (list, read, send)",
+          "agent": "Copilot",
+          "labels": ["development", "phase-4", "mgc"],
+          "body": "## Objective\n\nImplement `mgc mail` commands for reading and sending emails via Microsoft Graph.\n\n## Commands to implement\n\n### `mgc mail list`\n- Flags: `--folder <name>` (inbox, sentitems, drafts), `--top <int>`, `--all`, `--unread`\n- Calls `GET /me/mailFolders/{folder}/messages`\n- Default columns: `id`, `subject`, `from.emailAddress.name`, `receivedDateTime`, `isRead`\n- Example: `mgc mail list --folder inbox --top 10 --unread`\n\n### `mgc mail read <message-id>`\n- Calls `GET /me/messages/{id}`\n- Shows full message body (text or HTML rendered as plain text)\n\n### `mgc mail send`\n- Flags: `--to <email>`, `--subject <text>`, `--body <text>`, `--body-file <path>`, `--cc <email>`\n- Calls `POST /me/sendMail`\n- Example: `mgc mail send --to user@contoso.com --subject \"Hello\" --body \"World\"`\n\n### `mgc mail folders list`\n- Calls `GET /me/mailFolders`\n\n## File structure:\n- `mgc/cmd/mail/mail.go`\n- `mgc/cmd/mail/list.go`\n- `mgc/cmd/mail/read.go`\n- `mgc/cmd/mail/send.go`\n- `mgc/cmd/mail/folders.go`\n\n## Acceptance Criteria\n- All commands compile\n- `mgc mail --help` shows all subcommands\n- `go build ./...` passes\n- Output respects global `--output` flag\n\n## Notes\n- HTML body should be stripped to plain text for table/yaml output\n- Use `golang.org/x/net/html` for HTML stripping if needed\n- Add to root command"
+        },
+        {
+          "title": "[DEV] Implement mgc calendar commands (events list, create, delete)",
+          "agent": "Codex",
+          "labels": ["development", "phase-4", "mgc"],
+          "body": "## Objective\n\nImplement `mgc calendar` commands for calendar management via Microsoft Graph.\n\n## Commands to implement\n\n### `mgc calendar events list`\n- Flags: `--start <datetime>`, `--end <datetime>`, `--top <int>`, `--all`\n- Calls `GET /me/events?$orderby=start/dateTime&startDateTime=...&endDateTime=...`\n- Default columns: `id`, `subject`, `start.dateTime`, `end.dateTime`, `organizer.emailAddress.name`\n- Example: `mgc calendar events list --start 2026-03-10T00:00:00Z --end 2026-03-17T00:00:00Z`\n\n### `mgc calendar events get <event-id>`\n- Calls `GET /me/events/{id}`\n- Shows all event details\n\n### `mgc calendar events create`\n- Flags: `--subject`, `--start`, `--end`, `--timezone`, `--attendees <emails>`, `--location`, `--body`\n- Calls `POST /me/events`\n- Example: `mgc calendar events create --subject \"Team Meeting\" --start 2026-03-15T10:00:00 --end 2026-03-15T11:00:00 --timezone \"UTC\"`\n\n### `mgc calendar events delete <event-id>`\n- Calls `DELETE /me/events/{id}`\n- Requires `--yes` flag\n\n### `mgc calendar calendars list`\n- Calls `GET /me/calendars`\n\n## File structure:\n- `mgc/cmd/calendar/calendar.go`\n- `mgc/cmd/calendar/events.go`\n- `mgc/cmd/calendar/list.go`\n- `mgc/cmd/calendar/create.go`\n- `mgc/cmd/calendar/delete.go`\n- `mgc/cmd/calendar/calendars.go`\n\n## Acceptance Criteria\n- All commands compile\n- `mgc calendar --help` shows all subcommands\n- Datetime flags accept ISO 8601 format\n- `go build ./...` passes\n\n## Notes\n- Add to root command\n- DateTime parsing should be flexible (accept both RFC3339 and `2006-01-02T15:04:05` formats)\n- Use `time.Parse` with multiple formats"
+        },
+        {
+          "title": "[TEST] Write tests for mail and calendar commands + E2E test suite",
+          "agent": "Claude",
+          "labels": ["testing", "phase-4", "mgc"],
+          "body": "## Objective\n\nWrite tests for mail and calendar commands, and create an end-to-end test suite document.\n\n## Requirements\n\n### 1. `mgc/cmd/mail/mail_test.go`\n- `TestMailListInbox` - Verify inbox list call\n- `TestMailSend` - Verify send POST body format\n- `TestMailRead` - Verify single message retrieval\n\n### 2. `mgc/cmd/calendar/calendar_test.go`\n- `TestCalendarEventsList` - Verify events list with date filters\n- `TestCalendarEventCreate` - Verify POST body for event creation\n- `TestCalendarEventDelete` - Verify DELETE request\n\n### 3. `mgc/docs/testing-guide.md`\nCreate a testing guide:\n- How to run unit tests: `cd mgc && go test ./... -race`\n- How to run with coverage: `go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out`\n- How to do manual testing with a real tenant (steps for device flow)\n- E2E test checklist for manual validation before release\n\n### 4. Update `mgc/Makefile`\nAdd: `make test-coverage` target that generates HTML coverage report\n\n## Acceptance Criteria\n- `go test ./...` passes with 0 failures\n- Coverage report can be generated\n- Testing guide is clear and actionable\n\n## Notes\n- Follow same test patterns established in Phase 2 and 3 tests\n- Mock all HTTP calls - no real network calls in tests"
+        },
+        {
+          "title": "[RELEASE] Prepare and tag v0.1.0 release of mgc CLI",
+          "agent": "Copilot",
+          "labels": ["release", "phase-4", "mgc"],
+          "body": "## Objective\n\nPrepare the v0.1.0 release of the `mgc` CLI tool.\n\n## Requirements\n\n### 1. Update `mgc/main.go` version constant\n```go\nconst Version = \"0.1.0\"\n```\n\n### 2. Create `CHANGELOG.md` in root\n```markdown\n# Changelog\n\n## [0.1.0] - 2026-03-XX\n\n### Added\n- `mgc auth login` - OAuth2 device flow authentication\n- `mgc auth status` - Show current authentication\n- `mgc auth logout` - Clear credentials\n- `mgc users` - User management commands (list, get, create, update, delete)\n- `mgc groups` - Group management commands (list, get, create, members, owners)\n- `mgc mail` - Email commands (list, read, send)\n- `mgc calendar` - Calendar commands (events list, get, create, delete)\n- Multiple output formats: `--output json|table|yaml|tsv`\n- Cross-platform support: Linux, macOS, Windows\n```\n\n### 3. Ensure `mgc/Makefile` `cross-build` target works:\n```makefile\ncross-build:\n\tGOOS=linux GOARCH=amd64 go build -ldflags=\"-X main.Version=$(VERSION)\" -o bin/mgc-linux-amd64 .\n\tGOOS=darwin GOARCH=amd64 go build -ldflags=\"-X main.Version=$(VERSION)\" -o bin/mgc-darwin-amd64 .\n\tGOOS=darwin GOARCH=arm64 go build -ldflags=\"-X main.Version=$(VERSION)\" -o bin/mgc-darwin-arm64 .\n\tGOOS=windows GOARCH=amd64 go build -ldflags=\"-X main.Version=$(VERSION)\" -o bin/mgc-windows-amd64.exe .\n```\n\n### 4. Verify all go tests pass:\n`cd mgc && go test ./... -race`\n\n### 5. Update `README.md` Installation section with binary download instructions\n\n## Acceptance Criteria\n- `CHANGELOG.md` exists with v0.1.0 entry\n- Version constant is set to `0.1.0`\n- `cross-build` target produces 4 binaries\n- All tests pass\n- README has installation instructions\n\n## Trigger release\nAfter this PR is merged, the auto-release workflow will create the GitHub release automatically.\n\n## Notes\n- Do NOT manually create the git tag - the `auto-release.yml` workflow does this\n- Just update the version constant and changelog, then commit"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Phase 5: Advanced Features & v0.2.0",
+      "description": "Add advanced features: JMESPath filtering, OneDrive files, Teams, batch operations",
+      "tasks": [
+        {
+          "title": "[DEV] Implement JMESPath query filtering for all commands",
+          "agent": "Copilot",
+          "labels": ["development", "phase-5", "mgc"],
+          "body": "## Objective\n\nImplement `--query` flag support using JMESPath to filter and transform output from any command.\n\n## Requirements\n\n### Add dependency\n`go get github.com/jmespath/go-jmespath`\n\n### Update `mgc/internal/output/format.go`\n- After getting JSON data, apply JMESPath query if `--query` flag is set\n- Then format the result according to `--output` flag\n\n### Examples\n```bash\n# Get just display names\nmgc users list --query '[].displayName' -o json\n\n# Filter users in Engineering\nmgc users list --query \"[?department=='Engineering'].{name: displayName, email: mail}\"\n\n# Get first calendar event subject\nmgc calendar events list --query '[0].subject'\n```\n\n## Acceptance Criteria\n- `--query` flag works on all commands that return data\n- Works with all output formats\n- Invalid JMESPath expression shows helpful error message\n- Tests added for query filtering in `output/format_test.go`"
+        },
+        {
+          "title": "[DEV] Implement mgc files commands (OneDrive)",
+          "agent": "Codex",
+          "labels": ["development", "phase-5", "mgc"],
+          "body": "## Objective\n\nImplement `mgc files` commands for OneDrive file management.\n\n## Commands to implement\n\n### `mgc files list [path]`\n- Lists files in OneDrive root or specified path\n- Calls `GET /me/drive/root/children` or `GET /me/drive/root:/{path}:/children`\n- Default columns: `id`, `name`, `size`, `lastModifiedDateTime`, `folder`\n\n### `mgc files get <path>`\n- Gets file metadata: `GET /me/drive/root:/{path}`\n\n### `mgc files download <path> [--output-file <local-path>]`\n- Downloads file content: `GET /me/drive/root:/{path}:/content`\n- Saves to local file or stdout\n\n### `mgc files upload <local-path> [--dest <remote-path>]`\n- Uploads file: `PUT /me/drive/root:/{remotePath}:/content`\n- For files < 4MB\n\n### `mgc files delete <path>`\n- Deletes file: `DELETE /me/drive/root:/{path}`\n\n## File structure:\n- `mgc/cmd/files/files.go`\n- `mgc/cmd/files/list.go`\n- `mgc/cmd/files/download.go`\n- `mgc/cmd/files/upload.go`\n- `mgc/cmd/files/delete.go`\n\n## Acceptance Criteria\n- All commands compile\n- Upload/download tested with mock server\n- `go build ./...` passes"
+        },
+        {
+          "title": "[ARCH] Code review: Review Phase 3-5 implementation quality",
+          "agent": "Claude",
+          "labels": ["architecture", "phase-5", "mgc", "review"],
+          "body": "## Objective\n\nConduct an architectural code review of all code implemented in Phases 3-5.\n\n## Review Checklist\n\n### Code Quality\n- [ ] All public functions have godoc comments\n- [ ] Error handling is consistent (wrap with context)\n- [ ] No `panic()` in non-test code\n- [ ] Context is passed through for cancellation support\n- [ ] No hardcoded credentials or tenant IDs\n\n### API Design\n- [ ] Command flags are consistent across all commands\n- [ ] Output format is consistent\n- [ ] Error messages are helpful and actionable\n- [ ] `--help` text is accurate\n\n### Testing\n- [ ] Critical paths have test coverage\n- [ ] Tests are independent\n- [ ] No real network calls in tests\n\n## Deliverables\n\n1. **Create `docs/code-review-phase-3-5.md`** with findings and recommendations\n2. **Fix any critical issues** found during review (update code directly)\n3. **Update `docs/ARCHITECTURE.md`** if actual implementation differs from design\n\n## Acceptance Criteria\n- Review document created with specific findings per package\n- All critical issues (security, crash-risk) fixed in same PR\n- Architecture doc reflects actual implementation"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Phase 6: Polish, Documentation & v1.0.0 Release",
+      "description": "Final polish, complete documentation, and release v1.0.0",
+      "tasks": [
+        {
+          "title": "[DEV] Add shell completion and interactive prompts",
+          "agent": "Copilot",
+          "labels": ["development", "phase-6", "mgc"],
+          "body": "## Objective\n\nAdd shell completion support and improve interactive UX.\n\n## Requirements\n\n### 1. Shell completion\nCobra provides this natively:\n```go\nrootCmd.AddCommand(completionCmd)\n```\nAdd `mgc completion bash|zsh|fish|powershell` command.\n\n### 2. Install script\nCreate `scripts/install.sh` that:\n- Detects OS and architecture\n- Downloads appropriate binary from GitHub Releases\n- Installs to `/usr/local/bin/mgc` (Linux/Mac) or `C:\\Program Files\\mgc\\` (Windows)\n- Sets up shell completion\n\n### 3. `mgc init` command\nInteractive setup wizard:\n- Prompts for tenant ID (or discovers from environment)\n- Runs `auth login`\n- Tests connection with `mgc users get me`\n- Shows success message\n\n## Acceptance Criteria\n- `mgc completion bash` outputs valid bash completion script\n- Install script works on Ubuntu\n- `mgc init` runs without errors"
+        },
+        {
+          "title": "[DEV] Complete README with full usage examples and badges",
+          "agent": "Codex",
+          "labels": ["development", "phase-6", "mgc", "documentation"],
+          "body": "## Objective\n\nUpdate `README.md` with comprehensive documentation.\n\n## Requirements\n\n### Sections to add/update:\n1. **Badges**: build status, version, license, Go version\n2. **Quick Start**: 3-step getting started (install, login, first command)\n3. **Installation**: All platforms + install script\n4. **Authentication**: Explain device flow, tenant configuration\n5. **Commands Reference**: Every command with examples\n   - `auth`, `users`, `groups`, `mail`, `calendar`, `files`\n6. **Output Formats**: Examples of json/table/yaml/tsv for same command\n7. **Agent-Friendly Usage**: How to use mgc in scripts and agents\n   - `eval $(mgc auth login --format env-vars)`\n   - `mgc users list -o json | jq '.[] | .userPrincipalName'`\n   - `mgc users list --query '[].userPrincipalName' -o tsv`\n8. **Configuration**: `~/.config/mgc/config.json` reference\n9. **Contributing**: How to contribute (for agents and humans)\n10. **License**: MIT\n\n## Acceptance Criteria\n- README has all 10 sections\n- Every command has at least one example\n- Agent-friendly section demonstrates JMESPath querying\n- README renders correctly as Markdown"
+        },
+        {
+          "title": "[RELEASE] Prepare v1.0.0 release - final testing and changelog",
+          "agent": "Claude",
+          "labels": ["release", "phase-6", "mgc"],
+          "body": "## Objective\n\nPrepare the v1.0.0 release of the `mgc` CLI.\n\n## Requirements\n\n### 1. Final test pass\nRun and verify:\n```bash\ncd mgc\ngo test ./... -race -count=1\ngo vet ./...\ngo build ./...\n```\nFix any remaining test failures or build errors.\n\n### 2. Update `mgc/main.go`\n```go\nconst Version = \"1.0.0\"\n```\n\n### 3. Update `CHANGELOG.md`\nAdd v1.0.0 section with all features added since v0.1.0:\n- JMESPath query filtering\n- OneDrive files commands\n- Shell completion\n- `mgc init` wizard\n- Code review improvements from Phase 5\n\n### 4. Create `SECURITY.md`\n- Responsible disclosure policy\n- Note that credentials are stored encrypted\n- Supported versions\n\n### 5. Create `.github/CODEOWNERS`\n```\n* @chenxizhang\n```\n\n## Acceptance Criteria\n- All tests pass\n- Version is `1.0.0`\n- CHANGELOG is complete\n- `go build ./...` produces working binary\n\n## Notes\n- After this PR merges to main, the auto-release workflow tags v1.0.0 automatically\n- The workflow builds cross-platform binaries and attaches to the release"
+        }
+      ]
+    }
+  ]
+}

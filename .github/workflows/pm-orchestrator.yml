@@ -1,0 +1,398 @@
+name: PM Orchestrator — mgc project
+
+on:
+  schedule:
+    # Run every hour to check project progress and create new tasks
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_phase:
+        description: 'Force create tasks for specific phase (1-6). Leave empty for auto-detection.'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Dry run: print what would be created without creating issues (true/false)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  COPILOT_NODE_ID: "BOT_kgDOC9w8XQ"
+  CLAUDE_NODE_ID: "BOT_kgDODnPHJg"
+  CODEX_NODE_ID: "BOT_kgDODnSAjQ"
+
+jobs:
+  orchestrate:
+    name: PM — Check progress and create next tasks
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      # ─────────────────────────────────────────────────────────────
+      # STEP 1: Determine current project phase
+      # Logic: find the highest phase that has AT LEAST ONE open issue
+      #        with a "phase-N" label. If none, that means either
+      #        we haven't started (create phase 1) or all phases done.
+      # ─────────────────────────────────────────────────────────────
+      - name: Detect current phase
+        id: detect_phase
+        run: |
+          FORCE_PHASE="${{ github.event.inputs.force_phase }}"
+
+          if [ -n "$FORCE_PHASE" ]; then
+            echo "Forcing phase: $FORCE_PHASE"
+            echo "current_phase=$FORCE_PHASE" >> "$GITHUB_OUTPUT"
+            echo "action=create" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PROJECT_CONFIG=".github/project/mgc-project.json"
+          TOTAL_PHASES=$(jq '.phases | length' "$PROJECT_CONFIG")
+          echo "Total phases in project: $TOTAL_PHASES"
+
+          # Check each phase from 1 to TOTAL_PHASES
+          ACTIVE_PHASE=""
+          COMPLETED_UP_TO=0
+
+          for PHASE_IDX in $(seq 1 $TOTAL_PHASES); do
+            LABEL="phase-$PHASE_IDX"
+
+            # Count open issues with this phase label
+            OPEN_COUNT=$(gh issue list \
+              --repo "$REPO" \
+              --label "$LABEL" \
+              --state open \
+              --json number \
+              --jq 'length' 2>/dev/null || echo "0")
+
+            # Count closed issues with this phase label
+            CLOSED_COUNT=$(gh issue list \
+              --repo "$REPO" \
+              --label "$LABEL" \
+              --state closed \
+              --json number \
+              --jq 'length' 2>/dev/null || echo "0")
+
+            echo "Phase $PHASE_IDX: $OPEN_COUNT open, $CLOSED_COUNT closed"
+
+            if [ "$OPEN_COUNT" -gt 0 ]; then
+              # This phase is actively in progress
+              ACTIVE_PHASE=$PHASE_IDX
+              echo "Phase $PHASE_IDX is ACTIVE (has open issues)"
+              break
+            elif [ "$CLOSED_COUNT" -gt 0 ]; then
+              # This phase is complete
+              COMPLETED_UP_TO=$PHASE_IDX
+              echo "Phase $PHASE_IDX is COMPLETE"
+            fi
+          done
+
+          if [ -n "$ACTIVE_PHASE" ]; then
+            echo "Current active phase: $ACTIVE_PHASE"
+            echo "current_phase=$ACTIVE_PHASE" >> "$GITHUB_OUTPUT"
+            echo "action=monitor" >> "$GITHUB_OUTPUT"
+          elif [ "$COMPLETED_UP_TO" -eq "$TOTAL_PHASES" ]; then
+            echo "All phases complete! Project done."
+            echo "current_phase=done" >> "$GITHUB_OUTPUT"
+            echo "action=done" >> "$GITHUB_OUTPUT"
+          else
+            NEXT_PHASE=$((COMPLETED_UP_TO + 1))
+            echo "No active phase. Creating phase $NEXT_PHASE tasks."
+            echo "current_phase=$NEXT_PHASE" >> "$GITHUB_OUTPUT"
+            echo "action=create" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ─────────────────────────────────────────────────────────────
+      # STEP 2: Check if current phase is complete (all issues closed)
+      # ─────────────────────────────────────────────────────────────
+      - name: Check if current phase is complete
+        id: phase_complete
+        if: steps.detect_phase.outputs.action == 'monitor'
+        run: |
+          PHASE="${{ steps.detect_phase.outputs.current_phase }}"
+          LABEL="phase-$PHASE"
+
+          OPEN_COUNT=$(gh issue list \
+            --repo "$REPO" \
+            --label "$LABEL" \
+            --state open \
+            --json number \
+            --jq 'length' 2>/dev/null || echo "0")
+
+          echo "Phase $PHASE has $OPEN_COUNT open issues"
+
+          if [ "$OPEN_COUNT" -eq 0 ]; then
+            echo "Phase $PHASE is COMPLETE — will create next phase tasks"
+            echo "is_complete=true" >> "$GITHUB_OUTPUT"
+            echo "next_phase=$((PHASE + 1))" >> "$GITHUB_OUTPUT"
+          else
+            echo "Phase $PHASE still in progress ($OPEN_COUNT open issues)"
+            echo "is_complete=false" >> "$GITHUB_OUTPUT"
+
+            # Report status of each open issue
+            echo "Open issues in Phase $PHASE:"
+            gh issue list \
+              --repo "$REPO" \
+              --label "$LABEL" \
+              --state open \
+              --json number,title,assignees \
+              --jq '.[] | "  #\(.number) \(.title) [assigned to: \(.assignees | map(.login) | join(", "))]"'
+          fi
+
+      # ─────────────────────────────────────────────────────────────
+      # STEP 3: Ensure required labels exist
+      # ─────────────────────────────────────────────────────────────
+      - name: Ensure project labels exist
+        if: >-
+          steps.detect_phase.outputs.action == 'create' ||
+          (steps.detect_phase.outputs.action == 'monitor' && steps.phase_complete.outputs.is_complete == 'true')
+        run: |
+          create_label() {
+            local name=$1 color=$2 desc=$3
+            gh label create "$name" --color "$color" --description "$desc" --repo "$REPO" 2>/dev/null || \
+            gh label edit "$name" --color "$color" --description "$desc" --repo "$REPO" 2>/dev/null || \
+            echo "Label '$name' already up to date"
+          }
+
+          create_label "mgc"          "0075ca" "mgc CLI project"
+          create_label "architecture" "e4e669" "Architecture & design tasks"
+          create_label "development"  "0052cc" "Development tasks"
+          create_label "testing"      "d93f0b" "Testing tasks"
+          create_label "release"      "0e8a16" "Release tasks"
+          create_label "ci-cd"        "5319e7" "CI/CD pipeline tasks"
+          create_label "review"       "f9d0c4" "Code review tasks"
+          create_label "documentation" "cfd3d7" "Documentation tasks"
+          for i in 1 2 3 4 5 6; do
+            create_label "phase-$i" "bfd4f2" "Phase $i tasks"
+          done
+
+      # ─────────────────────────────────────────────────────────────
+      # STEP 4: Create tasks for the target phase
+      # ─────────────────────────────────────────────────────────────
+      - name: Create phase tasks
+        if: >-
+          steps.detect_phase.outputs.action == 'create' ||
+          (steps.detect_phase.outputs.action == 'monitor' && steps.phase_complete.outputs.is_complete == 'true')
+        run: |
+          # Determine which phase to create
+          if [ "${{ steps.detect_phase.outputs.action }}" = "create" ]; then
+            TARGET_PHASE="${{ steps.detect_phase.outputs.current_phase }}"
+          else
+            TARGET_PHASE="${{ steps.phase_complete.outputs.next_phase }}"
+          fi
+
+          PROJECT_CONFIG=".github/project/mgc-project.json"
+          TOTAL_PHASES=$(jq '.phases | length' "$PROJECT_CONFIG")
+
+          if [ "$TARGET_PHASE" -gt "$TOTAL_PHASES" ]; then
+            echo "All $TOTAL_PHASES phases completed. Project is DONE! 🎉"
+            exit 0
+          fi
+
+          echo "Creating tasks for Phase $TARGET_PHASE..."
+
+          # Get phase data (phases array is 0-indexed, phase IDs are 1-indexed)
+          PHASE_IDX=$((TARGET_PHASE - 1))
+          PHASE_NAME=$(jq -r ".phases[$PHASE_IDX].name" "$PROJECT_CONFIG")
+          PHASE_DESC=$(jq -r ".phases[$PHASE_IDX].description" "$PROJECT_CONFIG")
+
+          echo "Phase: $PHASE_NAME"
+          echo "Description: $PHASE_DESC"
+
+          # Assign agent helper
+          assign_agent() {
+            local ISSUE_NODE_ID=$1
+            local AGENT_NAME=$2
+            local BOT_NODE_ID=""
+
+            case "$AGENT_NAME" in
+              Copilot) BOT_NODE_ID="$COPILOT_NODE_ID" ;;
+              Claude)  BOT_NODE_ID="$CLAUDE_NODE_ID" ;;
+              Codex)   BOT_NODE_ID="$CODEX_NODE_ID" ;;
+              *) echo "Unknown agent: $AGENT_NAME"; return 1 ;;
+            esac
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [DRY RUN] Would assign $AGENT_NAME (node_id=$BOT_NODE_ID)"
+              return 0
+            fi
+
+            gh api graphql -f query="
+              mutation {
+                addAssigneesToAssignable(input: {
+                  assignableId: \"${ISSUE_NODE_ID}\"
+                  assigneeIds: [\"${BOT_NODE_ID}\"]
+                }) {
+                  assignable {
+                    ... on Issue {
+                      assignees(first: 5) {
+                        nodes { login }
+                      }
+                    }
+                  }
+                }
+              }" 2>&1 | jq -r '.data.addAssigneesToAssignable.assignable.assignees.nodes[].login' 2>/dev/null | xargs -I{} echo "  Assigned to: {}"
+          }
+
+          # Iterate through tasks in this phase
+          TASK_COUNT=$(jq ".phases[$PHASE_IDX].tasks | length" "$PROJECT_CONFIG")
+          echo "Creating $TASK_COUNT tasks..."
+
+          for TASK_IDX in $(seq 0 $((TASK_COUNT - 1))); do
+            TASK=$(jq -c ".phases[$PHASE_IDX].tasks[$TASK_IDX]" "$PROJECT_CONFIG")
+            TITLE=$(echo "$TASK" | jq -r '.title')
+            BODY=$(echo "$TASK" | jq -r '.body')
+            AGENT=$(echo "$TASK" | jq -r '.agent')
+            LABELS=$(echo "$TASK" | jq -r '.labels | join(",")')
+
+            echo ""
+            echo "Creating task: $TITLE"
+            echo "  Agent: $AGENT"
+            echo "  Labels: $LABELS"
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [DRY RUN] Would create issue and assign to $AGENT"
+              continue
+            fi
+
+            # Check if issue already exists (avoid duplicates)
+            EXISTING=$(gh issue list \
+              --repo "$REPO" \
+              --state all \
+              --search "\"$TITLE\" in:title" \
+              --json number \
+              --jq 'length' 2>/dev/null || echo "0")
+
+            if [ "$EXISTING" -gt 0 ]; then
+              echo "  Issue already exists, skipping: $TITLE"
+              continue
+            fi
+
+            # Build label args
+            LABEL_ARGS=""
+            IFS=',' read -ra LABEL_LIST <<< "$LABELS"
+            for LBL in "${LABEL_LIST[@]}"; do
+              LABEL_ARGS="$LABEL_ARGS --label $LBL"
+            done
+
+            # Create the issue
+            ISSUE_URL=$(gh issue create \
+              --repo "$REPO" \
+              --title "$TITLE" \
+              --body "$BODY" \
+              $LABEL_ARGS 2>&1)
+
+            echo "  Created: $ISSUE_URL"
+
+            # Extract issue number and node ID
+            ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oP '\d+$')
+            ISSUE_NODE_ID=$(gh api "repos/$REPO/issues/$ISSUE_NUMBER" --jq '.node_id' 2>/dev/null)
+
+            if [ -n "$ISSUE_NODE_ID" ]; then
+              assign_agent "$ISSUE_NODE_ID" "$AGENT"
+            fi
+
+            # Stagger to avoid rate limits
+            sleep 2
+          done
+
+          echo ""
+          echo "✅ Phase $TARGET_PHASE tasks created successfully!"
+          echo "Phase: $PHASE_NAME"
+
+      # ─────────────────────────────────────────────────────────────
+      # STEP 5: Check for stalled issues and re-notify agents
+      # ─────────────────────────────────────────────────────────────
+      - name: Check for stalled issues
+        if: steps.detect_phase.outputs.action == 'monitor' && steps.phase_complete.outputs.is_complete == 'false'
+        run: |
+          PHASE="${{ steps.detect_phase.outputs.current_phase }}"
+          LABEL="phase-$PHASE"
+          STALL_HOURS=24
+
+          echo "Checking for issues stalled > $STALL_HOURS hours in Phase $PHASE..."
+
+          # Get open issues older than STALL_HOURS
+          CUTOFF=$(date -u -d "-${STALL_HOURS} hours" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \
+                   date -u -v-${STALL_HOURS}H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \
+                   date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          STALLED=$(gh issue list \
+            --repo "$REPO" \
+            --label "$LABEL" \
+            --state open \
+            --json number,title,assignees,updatedAt \
+            --jq "[.[] | select(.updatedAt < \"$CUTOFF\")]")
+
+          STALLED_COUNT=$(echo "$STALLED" | jq 'length')
+          echo "Found $STALLED_COUNT stalled issues"
+
+          if [ "$STALLED_COUNT" -gt 0 ]; then
+            echo "$STALLED" | jq -c '.[]' | while read -r issue; do
+              ISSUE_NUM=$(echo "$issue" | jq -r '.number')
+              ISSUE_TITLE=$(echo "$issue" | jq -r '.title')
+              ASSIGNEES=$(echo "$issue" | jq -r '.assignees | map(.login) | join(", ")')
+
+              echo "  Stalled: #$ISSUE_NUM - $ISSUE_TITLE (assigned to: $ASSIGNEES)"
+
+              # Add a reminder comment
+              REMINDER_MSG="⏰ **PM Reminder**: This task has been open for over $STALL_HOURS hours without updates.
+
+Assigned agent(s): $ASSIGNEES
+
+Please provide a status update or continue working on this task. If you are blocked, leave a comment describing the blocker.
+
+**Phase $PHASE target**: Complete all tasks in this phase to unlock the next phase."
+
+              gh issue comment "$ISSUE_NUM" \
+                --repo "$REPO" \
+                --body "$REMINDER_MSG" 2>/dev/null || true
+            done
+          fi
+
+      # ─────────────────────────────────────────────────────────────
+      # STEP 6: Post project status summary
+      # ─────────────────────────────────────────────────────────────
+      - name: Post project status
+        if: always()
+        run: |
+          PROJECT_CONFIG=".github/project/mgc-project.json"
+          TOTAL_PHASES=$(jq '.phases | length' "$PROJECT_CONFIG")
+
+          echo ""
+          echo "═══════════════════════════════════════"
+          echo "  mgc Project Status Summary"
+          echo "═══════════════════════════════════════"
+
+          for PHASE_IDX in $(seq 1 $TOTAL_PHASES); do
+            LABEL="phase-$PHASE_IDX"
+            PHASE_NAME=$(jq -r ".phases[$((PHASE_IDX - 1))].name" "$PROJECT_CONFIG")
+
+            OPEN=$(gh issue list --repo "$REPO" --label "$LABEL" --state open --json number --jq 'length' 2>/dev/null || echo "?")
+            CLOSED=$(gh issue list --repo "$REPO" --label "$LABEL" --state closed --json number --jq 'length' 2>/dev/null || echo "?")
+
+            if [ "$OPEN" = "0" ] && [ "$CLOSED" -gt 0 ]; then
+              STATUS="✅ Complete"
+            elif [ "$OPEN" -gt 0 ]; then
+              STATUS="🔄 In Progress ($OPEN open, $CLOSED done)"
+            elif [ "$OPEN" = "0" ] && [ "$CLOSED" = "0" ]; then
+              STATUS="⏳ Not Started"
+            else
+              STATUS="? Unknown"
+            fi
+
+            echo "  Phase $PHASE_IDX: $STATUS"
+          done
+
+          echo "═══════════════════════════════════════"
