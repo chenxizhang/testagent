@@ -1,0 +1,170 @@
+name: CI — Build & Test mgc
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'mgc/**'
+      - '.github/workflows/build-test.yml'
+  pull_request:
+    paths:
+      - 'mgc/**'
+      - '.github/workflows/build-test.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build-and-test:
+    name: Build & Test (Go ${{ matrix.go-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.22', '1.23']
+        exclude:
+          # Only run full matrix on PRs; for push runs only ubuntu+latest Go
+          - os: macos-latest
+            go-version: '1.22'
+          - os: windows-latest
+            go-version: '1.22'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          cache-dependency-path: mgc/go.sum
+
+      - name: Check go.mod exists
+        id: check_mod
+        shell: bash
+        run: |
+          if [ -f "mgc/go.mod" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "mgc/go.mod not found — skipping build steps"
+          fi
+
+      - name: Download dependencies
+        if: steps.check_mod.outputs.exists == 'true'
+        working-directory: mgc
+        run: go mod download
+
+      - name: Verify dependencies
+        if: steps.check_mod.outputs.exists == 'true'
+        working-directory: mgc
+        run: go mod verify
+
+      - name: Build
+        if: steps.check_mod.outputs.exists == 'true'
+        working-directory: mgc
+        run: go build ./...
+
+      - name: Vet
+        if: steps.check_mod.outputs.exists == 'true'
+        working-directory: mgc
+        run: go vet ./...
+
+      - name: Test with race detector
+        if: steps.check_mod.outputs.exists == 'true'
+        working-directory: mgc
+        run: go test ./... -race -count=1 -timeout=120s -coverprofile=coverage.out
+
+      - name: Upload coverage report
+        if: steps.check_mod.outputs.exists == 'true' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-go${{ matrix.go-version }}
+          path: mgc/coverage.out
+          retention-days: 7
+
+  # Cross-compilation check (Linux only, fast)
+  cross-compile:
+    name: Cross-compile check
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+          cache-dependency-path: mgc/go.sum
+
+      - name: Check go.mod exists
+        id: check_mod
+        run: |
+          [ -f "mgc/go.mod" ] && echo "exists=true" >> "$GITHUB_OUTPUT" || echo "exists=false" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile for all platforms
+        if: steps.check_mod.outputs.exists == 'true'
+        working-directory: mgc
+        run: |
+          mkdir -p bin
+          echo "Building for Linux amd64..."
+          GOOS=linux   GOARCH=amd64 go build -o bin/mgc-linux-amd64   . || true
+          echo "Building for macOS amd64..."
+          GOOS=darwin  GOARCH=amd64 go build -o bin/mgc-darwin-amd64  . || true
+          echo "Building for macOS arm64..."
+          GOOS=darwin  GOARCH=arm64 go build -o bin/mgc-darwin-arm64  . || true
+          echo "Building for Windows amd64..."
+          GOOS=windows GOARCH=amd64 go build -o bin/mgc-windows-amd64.exe . || true
+          ls -la bin/
+
+      - name: Upload cross-compiled binaries
+        if: steps.check_mod.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mgc-binaries-${{ github.sha }}
+          path: mgc/bin/
+          retention-days: 7
+
+  # Post build result as PR comment
+  report-status:
+    name: Report status on PR
+    runs-on: ubuntu-latest
+    needs: [build-and-test, cross-compile]
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Post result comment
+        run: |
+          BUILD_STATUS="${{ needs.build-and-test.result }}"
+          CROSS_STATUS="${{ needs.cross-compile.result }}"
+
+          if [ "$BUILD_STATUS" = "success" ] && [ "$CROSS_STATUS" = "success" ]; then
+            ICON="✅"
+            MSG="Build & tests **passed**. Cross-compilation successful."
+          elif [ "$BUILD_STATUS" = "success" ]; then
+            ICON="⚠️"
+            MSG="Build & tests passed, but cross-compilation had issues."
+          else
+            ICON="❌"
+            MSG="Build or tests **failed**. Please check the workflow logs."
+          fi
+
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "$ICON **CI Result**: $MSG
+
+          | Job | Status |
+          |-----|--------|
+          | Build & Test | $BUILD_STATUS |
+          | Cross-Compile | $CROSS_STATUS |
+
+          *Commit: \`${{ github.sha }}\`*" \
+            2>/dev/null || true

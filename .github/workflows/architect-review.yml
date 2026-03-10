@@ -1,0 +1,69 @@
+name: Architect Review — Assign Claude to review agent PRs
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  request-architect-review:
+    name: Request architect (Claude) review
+    # Only for agent-created PRs on mgc/ changes
+    if: >-
+      (
+        github.event.pull_request.user.login == 'Copilot' ||
+        github.event.pull_request.user.login == 'Claude' ||
+        github.event.pull_request.user.login == 'Codex'
+      ) && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Check if PR touches mgc/ or docs/
+        id: check_files
+        run: |
+          FILES=$(gh pr view $PR_NUMBER --repo "$REPO" --json files --jq '[.files[].path] | join(",")')
+          echo "Changed files: $FILES"
+
+          if echo "$FILES" | grep -qE "^(mgc/|docs/)"; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add architect review comment (Claude)
+        if: steps.check_files.outputs.relevant == 'true' && github.event.pull_request.user.login != 'Claude'
+        run: |
+          COMMENT="## 🏗️ Architect Review Requested
+
+**PR Author**: @$PR_AUTHOR
+
+@claude Please conduct an **architectural review** of this PR. Check for:
+
+1. **Code quality**: Does the implementation follow the design in \`docs/ARCHITECTURE.md\`?
+2. **Error handling**: Are all errors properly handled and wrapped with context?
+3. **Testing**: Are there sufficient tests for the new code?
+4. **API design**: Are command flags consistent with other commands?
+5. **Security**: No hardcoded credentials, tokens stored securely?
+6. **Performance**: Any obvious performance issues (unbounded loops, missing pagination)?
+
+Please approve the PR if it meets our standards, or leave specific inline comments for the author to address.
+
+*This review request was automated by the PM Orchestrator.*"
+
+          gh pr comment $PR_NUMBER \
+            --repo "$REPO" \
+            --body "$COMMENT"
+
+      - name: Label PR with review status
+        if: steps.check_files.outputs.relevant == 'true'
+        run: |
+          gh pr edit $PR_NUMBER \
+            --repo "$REPO" \
+            --add-label "mgc" 2>/dev/null || true
