@@ -19,12 +19,17 @@ jobs:
       - name: Pull latest changes
         run: git pull origin ${{ github.ref_name }}
 
-      - name: Setup Copilot CLI
-        uses: github/setup-copilot@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
 
       - name: Fetch world hot news
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           TODAY=$(date -u +%Y-%m-%d)
           NEWS_FILE="news/hot-news-${TODAY}.md"
