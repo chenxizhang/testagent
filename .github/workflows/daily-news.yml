@@ -27,34 +27,24 @@ jobs:
       - name: Install Copilot CLI
         run: npm install -g @github/copilot
 
-      - name: Fetch world hot news
-        env:
-          GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-        run: |
-          TODAY=$(date -u +%Y-%m-%d)
-          NEWS_FILE="news/hot-news-${TODAY}.md"
-          mkdir -p news
-
-          copilot -p "Search for today's world hot news (date: ${TODAY}). \
-            List the top 10 most important global news headlines with a brief summary for each. \
-            Cover diverse categories including politics, technology, economy, science, and society. \
-            Format the output as a Markdown document with a title '# World Hot News - ${TODAY}' \
-            and each news item as a numbered list with a bold headline followed by a short summary paragraph." \
-            > "$NEWS_FILE"
-
-          echo "News saved to $NEWS_FILE"
-          cat "$NEWS_FILE"
-
-      - name: Commit and push
+      - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Fetch news and push via Copilot
+        env:
+          GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
           TODAY=$(date -u +%Y-%m-%d)
-          git add news/
-          if git diff --cached --quiet; then
-            echo "No new news to commit"
-          else
-            git commit -m "docs: add world hot news for ${TODAY}"
-            git push
-          fi
+
+          copilot -p "You are running in a CI environment. Complete the following tasks:
+
+          1. Create the directory 'news' if it does not exist.
+          2. Search for today's world hot news (date: ${TODAY}). Write a Markdown file at 'news/hot-news-${TODAY}.md' with:
+             - Title: '# World Hot News - ${TODAY}'
+             - Top 10 most important global news headlines, each as a numbered item with a bold headline and a brief summary paragraph.
+             - Cover diverse categories: politics, technology, economy, science, and society.
+          3. After writing the file, run 'git add news/' and commit with message 'docs: add world hot news for ${TODAY}'.
+          4. Push the commit to origin. If the push fails due to remote changes (e.g., another agent pushed first), automatically resolve it by running 'git pull --rebase origin main' and then retry the push. Repeat up to 3 times if needed.
+          5. If there are merge conflicts during rebase, resolve them by keeping both changes, then continue the rebase and push."
