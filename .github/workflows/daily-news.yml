@@ -1,0 +1,58 @@
+name: Daily Hot News
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC (08:00 Beijing time)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-news:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull latest changes
+        run: git pull origin ${{ github.ref_name }}
+
+      - name: Setup Copilot CLI
+        uses: github/setup-copilot@v1
+
+      - name: Fetch world hot news
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          NEWS_FILE="news/hot-news-${TODAY}.md"
+          mkdir -p news
+
+          copilot -p "Search for today's world hot news (date: ${TODAY}). \
+            List the top 10 most important global news headlines with a brief summary for each. \
+            Cover diverse categories including politics, technology, economy, science, and society. \
+            Format the output as a Markdown document with a title '# World Hot News - ${TODAY}' \
+            and each news item as a numbered list with a bold headline followed by a short summary paragraph." \
+            > "$NEWS_FILE"
+
+          echo "News saved to $NEWS_FILE"
+          cat "$NEWS_FILE"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          TODAY=$(date -u +%Y-%m-%d)
+          git add news/
+          # Only commit and push if there are changes
+          if git diff --cached --quiet; then
+            echo "No new news to commit"
+          else
+            git commit -m "docs: add world hot news for ${TODAY}
+
+          Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+            git push
+          fi
